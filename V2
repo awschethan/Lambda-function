@@ -1,0 +1,78 @@
+import json
+import base64
+from typing import Dict, Any
+
+# Constants
+HEADER_NAME = 'X-Token'  # Header name for the token value
+
+def decode_jwt_header(token: str) -> Dict[str, Any]:
+    """
+    Decode the JWT header and extract token information.
+    
+    Args:
+        token (str): JWT token string
+        
+    Returns:
+        Dict[str, Any]: Decoded JWT header data
+        
+    Raises:
+        Exception: If token decoding fails
+    """
+    try:
+        # Remove 'Bearer ' prefix if present
+        if token.startswith('Bearer '):
+            token = token.split(' ')[1]
+        
+        # Extract and decode header segment
+        header_segment = token.split('.')[0]
+        padding = '=' * (4 - (len(header_segment) % 4))
+        decoded_header = base64.urlsafe_b64decode(header_segment + padding)
+        
+        return json.loads(decoded_header)
+    except Exception as e:
+        raise Exception(f"Error decoding JWT header: {str(e)}")
+
+def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    """
+    AWS Lambda handler to process CloudFront requests and add X-Token header.
+    
+    Args:
+        event (Dict[str, Any]): Lambda event object
+        context (Any): Lambda context object
+        
+    Returns:
+        Dict[str, Any]: Modified request object
+    """
+    try:
+        request = event['Records'][0]['cf']['request']
+        headers = request['headers']
+        
+        # Return unmodified request if no authorization header
+        if 'authorization' not in headers:
+            return request
+            
+        # Process authorization header
+        auth_header = headers['authorization'][0]['value']
+        decoded_header = decode_jwt_header(auth_header)
+        
+        # Add X-Token header if token exists in decoded header
+        if 'token' in decoded_header:
+            request['headers'][HEADER_NAME.lower()] = [{
+                'key': HEADER_NAME,
+                'value': str(decoded_header['token'])
+            }]
+            print(f"Successfully added {HEADER_NAME}: {decoded_header['token']}")
+        
+        # Clean up headers by removing CloudFront-Viewer details
+        headers_to_remove = [
+            header for header in headers 
+            if header.startswith('cloudfront-viewer-')
+        ]
+        for header in headers_to_remove:
+            headers.pop(header, None)
+            
+        return request
+        
+    except Exception as e:
+        print(f"Error processing request: {str(e)}")
+        return event['Records'][0]['cf']['request']  # Return original request on error
